@@ -1,0 +1,7 @@
+numpy==2.2.4
+pandas==2.2.3
+matplotlib==3.10.1
+scikit-learn==1.6.1
+scipy==1.15.2
+ipython==9.0.2
+pyefd==1.7.0

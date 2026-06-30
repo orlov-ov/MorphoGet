@@ -99,3 +99,12 @@ At sigma = 0.1, the octagonal structure remains clearly recognizable.
 Increasing sigma produces progressively stronger distortions and may eventually destroy the geometric structure.
 
 The ideal octagon is not regular. It is stretched along the X-axis with a semi-axis ratio of 2:1.
+
+LICENSE: Creative Commons Zero v1.0 Universal (CC0 1.0)
+Public Domain Dedication
+
+Author: [Oleg V. Orlov]
+Year: 2026
+
+This synthetic dataset is dedicated to the public domain.
+Anyone can copy, modify, distribute, and use it for any purpose, including commercial, without asking permission.

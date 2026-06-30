@@ -306,9 +306,9 @@ class MorphoGet:
     # =========================================================================
     def calculate_efa(self, order=10, normalize=False, use_neutralized=False):
         if pyefd is None:
-            raise ImportError("Библиотека pyefd не установлена. Выполните: pip install pyefd")
+            raise ImportError("pyefd library is not installed. Run: pip install pyefd")
         if not self.xy_cols:
-            raise ValueError("Сначала вызовите set_landmarks()")
+            raise ValueError("Call set_landmarks() first")
             
         source_df = self.current_df
         if use_neutralized and self.neutralized_df is not None:
@@ -340,7 +340,7 @@ class MorphoGet:
 
     def run_efa_pca(self, n_components=5):
         if self.efa_coeffs_df is None:
-            raise ValueError("Сначала вызовите calculate_efa()")
+            raise ValueError("Call calculate_efa() first")
             
         pca = PCA(n_components=n_components)
         scores = pca.fit_transform(self.efa_coeffs_df.values)
@@ -368,7 +368,6 @@ class MorphoGet:
     # BLOCK 4: CORRELATIONS
     # =========================================================================
     def show_correlations(self, fa_metrics=None, n_pcs=4, use_neutralized=True):
-        """Корреляция между PCA исходных координат и метриками."""
         if fa_metrics is None: 
             fa_metrics = [m for m in self.fa_metrics if m != 'Taper_l' or self.use_taper]
             
@@ -405,9 +404,8 @@ class MorphoGet:
                 display(corr_matrix.round(3))
 
     def show_efa_correlations(self, fa_metrics=None, n_efa_pcs=4):
-        """Корреляция между ЭЛЛИПТИЧЕСКИМИ ФУРЬЕ PC и метриками."""
         if self.efa_pc_scores is None:
-            raise ValueError("Сначала вызовите calculate_efa() и run_efa_pca()")
+            raise ValueError("Call calculate_efa() and run_efa_pca() first")
             
         if fa_metrics is None: 
             fa_metrics = [m for m in self.fa_metrics if m != 'Taper_l' or self.use_taper]
@@ -438,7 +436,7 @@ class MorphoGet:
             try:
                 display(corr_matrix.round(3).style.background_gradient(cmap='RdBu_r', axis=None, vmin=-1, vmax=1).format("{:.3f}"))
             except AttributeError:
-                print("⚠️ Для цветного вывода установите jinja2: pip install jinja2")
+                print("⚠️ Install jinja2 for colored output: pip install jinja2")
                 display(corr_matrix.round(3))
 
     # =========================================================================
@@ -557,16 +555,16 @@ class MorphoGet:
     def plot_efa_pca(self, pc_indices=[0, 1, 2, 3], z_ext=3.0, n_cols=2, n_points=200, 
                      flip_x=False, flip_y=False, invert_sigma=[], figsize=None):
         if pyefd is None:
-            raise ImportError("Библиотека pyefd не установлена.")
+            raise ImportError("pyefd library is not installed. Run: pip install pyefd")
         if self.efa_pca is None or self.efa_pc_scores is None:
-            raise ValueError("Сначала вызовите calculate_efa() и run_efa_pca()")
+            raise ValueError("Call calculate_efa() and run_efa_pca() first")
             
         mean_coeffs = self.efa_pca.mean_
         mean_locus = self.efa_locus.mean(axis=0)
         
         valid_pc_indices = [idx for idx in pc_indices if idx < self.efa_pca.n_components_]
         if len(valid_pc_indices) < len(pc_indices):
-            print(f"⚠️ Запрошены PC {pc_indices}, но посчитано только {self.efa_pca.n_components_}. Отображены {valid_pc_indices}")
+            print(f"⚠️ Requested PCs {pc_indices}, but only {self.efa_pca.n_components_} computed. Showing {valid_pc_indices}")
         
         shapes, titles = [], []
         for idx in valid_pc_indices:

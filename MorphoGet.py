@@ -19,6 +19,7 @@ try:
 except ImportError:
     def display(obj): print(obj)
 
+__version__ = "0.1.0"
 
 class MorphoGet:
     # =========================================================================

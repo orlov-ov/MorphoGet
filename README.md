@@ -1,15 +1,20 @@
 
-# MorphoGet
+# Morpho**GET**
+
+![Version](https://img.shields.io/badge/version-0.1.0-blue)
+[![License: AGPL-3.0](https://img.shields.io/badge/Code_License-AGPL_3.0-red)](https://www.gnu.org/licenses/agpl-3.0.html)
+[![License: CC0-1.0](https://img.shields.io/badge/Data_License-CC0_1.0-lightgrey)](http://creativecommons.org/publicdomain/zero/1.0/)
+![Python](https://img.shields.io/badge/Python-3.10%2B-green)
 
 **MorphoGet** is a Python library (class) for morphometric analysis of insect wing shape. The class enables automatic extraction of the most informative flight activity (FA) indicators from geometric landmarks (XY-coordinates) of digitized objects. Performs Generalized Procrustes Analysis (GPA), Elliptical Fourier Analysis (EFA), correlations and visualizes morphospace for comparison and establishment.
 
 ## Key Features
 
-- **Flight Activity (FA) Metrics Calculation:** Computes aspect ratio, second moment of area, sweep angle, and wing taper from 4–6 homologous landmarks.
-- **Contour Processing:** Automatic shape alignment (GPA) and neutralization of size/digitization error effects (PC1 removal).
-- **Elliptical Fourier Analysis (EFA):** Shape analysis of the entire contour using the elliptical Fourier method.
+- **Flight Activity Metrics Calculation:** Computes aspect ratio, second moment of area, sweep angle, and wing taper from 4–6 homologous landmarks.
+- **Contour Processing:** Automatic shape alignment [Generalized Procrustes Analysis (GPA)](https://docs.scipy.org/doc/scipy-1.15.3/reference/generated/scipy.spatial.procrustes.html#scipy.spatial.procrustes) and neutralization of analyze/digitization error effects (PC removal).
+- **Elliptical Fourier Analysis (EFA):** Shape analysis of the entire contour using the [elliptical Fourier method](https://github.com/hbldh/pyefd).
 - **Correlation Analysis:** Evaluates relationships between metrics and shape principal components (GPA PCA / EFA PCA).
-- **Visualization:** Generates wing schematics, morphospaces (metric-to-shape regressions), consensus plots, and biplots.
+- **Visualization:** Generates wing schematics, morphospaces (metric-to-shape regressions), consensus plots, and biplots for establishment.
 
 ---
 
@@ -43,15 +48,15 @@ The class accepts a `pandas.DataFrame`. Data must contain point coordinates (col
 
 ```python
 import pandas as pd
-from MorphoPipeline import MorphometricPipeline
+from MorphoGet import morphoget
 
 df = pd.read_csv("morphometric_data.csv")
 
 # Initialization (set is_pre_aligned=True if data is already aligned)
-pipe = MorphometricPipeline(df)
+get = gorphoget(df)
 
 # Filtering (keep only males)
-pipe.filter_data(column='sex', value='M')
+get.filter_data(column='sex', value='M')
 ```
 
 ### 2. Landmark Configuration
@@ -59,30 +64,30 @@ The `set_landmarks()` method tells the pipeline which columns are X and Y coordi
 
 ```python
 # Automatic detection
-pipe.set_landmarks()
+get.set_landmarks()
 
 # Manual selection (e.g., points 14 through 30)
-pipe.set_landmarks([f'{ax}{i}' for i in range(14, 31) for ax in ['X', 'Y']])
+get.set_landmarks([f'{ax}{i}' for i in range(14, 31) for ax in ['X', 'Y']])
 ```
 
 ### 3. Procrustes Analysis (GPA) and Size Neutralization
 Shape alignment and removal of the size component.
 
 ```python
-pipe.run_gpa()
+get.run_gpa()
 
 # Remove the first principal component
-pipe.neutralize_pcs(components_to_remove=[0])
+get.neutralize_pcs(components_to_remove=[0])
 
 # Visualize the consensus shape
-pipe.plot_consensus(flip_x=True, figsize=(5, 4), smooth=True)
+get.plot_consensus(flip_x=True, figsize=(5, 4), smooth=True)
 ```
 
 ### 4. Defining Key Points for Metric Calculation
 Specify which point numbers are anatomically significant.
 
 ```python
-pipe.set_fa_params(
+get.set_fa_params(
     Basal=1, 
     Apex=5, 
     Costa=3, 
@@ -92,10 +97,10 @@ pipe.set_fa_params(
 )
 
 # Verify the set points
-pipe.print_fa_params()
+get.print_fa_params()
 
 # Visualize wing schematic with segments (L, C, Proximal, etc.)
-pipe.plot_schematic(flip_x=True, figsize=(12, 7))
+get.plot_schematic(flip_x=True, figsize=(12, 7))
 ```
 
 ### 5. Calculating Flight Activity Metrics
@@ -110,14 +115,14 @@ pipe.calculate_fa_metrics(
 )
 
 # Visualize segment contributions to the component (vectors should point in opposite directions)
-pipe.plot_biplot('ma_biplot', figsize=(4, 3))
+get.plot_biplot('ma_biplot', figsize=(4, 3))
 ```
 
 ### 6. Visualizing Shape Variation (Morphospace)
 Allows visualization of how wing shape changes when a specific metric varies by ±Z standard deviations.
 
 ```python
-pipe.plot_regressions(
+get.plot_regressions(
     fa_metrics=['MA_s', 'AR_l', 'SA_a'], 
     n_cols=4,                            
     z_ext=3.0,                           # Deviation ±3σ
@@ -131,7 +136,7 @@ pipe.plot_regressions(
 Visualizes shape deformations along PCs.
 
 ```python
-pipe.plot_pca(
+get.plot_pca(
     pc_indices=[0, 1, 3], 
     n_cols=3, 
     z_ext=4.0, 
@@ -144,10 +149,10 @@ pipe.plot_pca(
 Shape analysis of the entire contour (requires `pyefd`).
 
 ```python
-pipe.calculate_efa(order=15, normalize=True, use_neutralized=False)
-pipe.run_efa_pca(n_components=5)
+get.calculate_efa(order=15, normalize=True, use_neutralized=False)
+get.run_efa_pca(n_components=5)
 
-pipe.plot_efa_pca(pc_indices=[0, 1], n_cols=2, z_ext=4.0, flip_x=True)
+get.plot_efa_pca(pc_indices=[0, 1], n_cols=2, z_ext=4.0, flip_x=True)
 ```
 
 ### 9. Correlation Analysis
@@ -155,10 +160,10 @@ Evaluates relationships between metrics and shape components (requires `jinja2` 
 
 ```python
 # Correlation of standard coordinates (Shape PCA) with metrics
-pipe.show_correlations(fa_metrics=['MA_s', 'AR_l', 'SA_a'], n_pcs=4)
+get.show_correlations(fa_metrics=['MA_s', 'AR_l', 'SA_a'], n_pcs=4)
 
 # Correlation of Elliptical Fourier components (EFA PCA) with metrics
-pipe.show_efa_correlations(n_efa_pcs=4)
+get.show_efa_correlations(n_efa_pcs=4)
 ```
 
 ---
@@ -191,18 +196,24 @@ Given appropriate wing geometry, the program computes key flight activity indica
 
 The `plot_consensus`, `plot_regressions`, `plot_pca`, and `plot_efa_pca` methods share these useful parameters:
 
-| Parameter          | Description                                                                                                                               |
-| :----------------- | :---------------------------------------------------------------------------------------------------------------------------------------- |
-| `figsize`          | Matplotlib figure size, e.g., `(5, 4)`                                                                                                   |
-| `flip_x`, `flip_y` | Mirror the shape along the X and Y axes. Useful for left/right organs.                                                                    |
-| `smooth`           | `True` — smooth the contour with a cubic spline. `False` — connect points with straight lines.                                            |
-| `z_ext`            | Range of variation in standard deviations (σ). `z_ext=4.0` displays shape at -4σ, mean, and +4σ.                                           |
-| `invert_sigma`     | List of PC indices or metric names for which -σ and +σ should be swapped. Useful for logical interpretation of visualizations.           |
-| `n_cols`           | Number of columns in the plot grid.                                                                                                      |
+| Parameter         | Description                                                                                                                                  
+| :-------------------- | :---------------------------------------------------------------------------------------------------------------------------------------- 
+| `figsize`              | Matplotlib figure size, e.g., `(5, 4)`                                                                                                   
+| `flip_x`, `flip_y`   | Mirror the shape along the X and Y axes. Useful for left/right organs.                                                                    
+| `smooth`             | `True` — smooth the contour with a cubic spline. `False` — connect points with straight lines.                                            
+| `z_ext`                | Range of variation in standard deviations (σ). `z_ext=3.0` displays shape at -3σ, mean, and +3σ.                                           
+| `invert_sigma`    | List of PC indices or metric names for which -σ and +σ should be swapped. Useful for logical interpretation of visualizations.           
+| `n_cols`              | Number of columns in the plot grid.                                                                                                      
 
 ---
 
 ## License
 
-This project is distributed under the GNU Affero General Public License v3.0.
+- **MorphoGet:** [AGPL-3.0](https://www.gnu.org/licenses/agpl-3.0.html) — open-source, modifications must be public.
+- **Synthetic Data:** [CC0 1.0](http://creativecommons.org/publicdomain/zero/1.0/) — Public Domain, free for any use.
+
+## References
+
+- Kuhl, F. P., & Giardina, C. R. (1982). Elliptic Fourier features of a closed contour. *Computer Graphics and Image Processing*, 18(3), 236-258. [DOI: 10.1016/0146-664X(82)90034-X](https://doi.org/10.1016/0146-664X(82)90034-X)
+- hbldh. (2016). PyEFD: Python implementation of "Elliptic Fourier Features of a Closed Contour". GitHub. [https://github.com/hbldh/pyefd](https://github.com/hbldh/pyefd)
 ```

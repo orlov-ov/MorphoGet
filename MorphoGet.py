@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 from sklearn.decomposition import PCA
 from sklearn.linear_model import LinearRegression
 from sklearn.preprocessing import StandardScaler
-from scipy.spatial import procrustes
+from scipy.linalg import svd
 from scipy.interpolate import splprep, splev
 from matplotlib.lines import Line2D
 import re
@@ -19,37 +19,91 @@ try:
 except ImportError:
     def display(obj): print(obj)
 
-__version__ = "0.1.0"
 
 class MorphoGet:
+
     # =========================================================================
-    # BLOCK 0: DICTIONARIES
+    # BLOCK 1: CONSTANTS AND PRESETS
     # =========================================================================
     KEY_LANDMARKS = ['Basal', 'Apex', 'Costa', 'Tornal', 'TaperCosta', 'TaperMargin']
-    AVAILABLE_METRICS = [
-        'MA_l', 'AR_l', 'AR_s', 'SA_l', 'SA_a', 'Taper_K', 'MA_s', 'Taper_l', 
-        'Proximal_l', 'Distal_l', 'Costa_l', 'Tornal_l', 'L', 'C', 'Taper', 
-        'Costa_A', 'Tornal_A'
-    ]
-    
+
     _BASE_FA_METRICS = [
         'MA_l', 'MA_s', 'AR_l', 'AR_s', 'SA_l', 'SA_a', 'Taper_l', 'Taper_K'
     ]
-    
+
     _DEFAULT_FA_PARAMS = {
         'Basal': 1, 'Apex': 5, 'Costa': 3, 'Tornal': 7,
         'TaperCosta': None, 'TaperMargin': None
     }
-    
+
     _BIPLOT_PRESETS = {
         'ma_biplot': ['Proximal_l', 'Distal_l'],
         'sa_biplot': ['Costa_l', 'Tornal_l'],
         'taper_biplot': ['Taper', 'C'],
-        'sa_a_biplot': ['Costa_A', 'Tornal_A']
+        'sa_a_biplot': ['Costa_A', 'Margin_A']
     }
 
+    _GPA_MAX_ITER = 20
+    _GPA_TOL = 1e-10
+    _SAVE_DPI = 300
+
     # =========================================================================
-    # BLOCK 1: INITIALIZATION AND SETUP
+    # BLOCK 2: COMMON PRIVATE HELPERS
+    # =========================================================================
+    def _get_col_name(self, df, axis, pt_num):
+        target = f"{axis.upper()}{pt_num}"
+        for col in df.columns:
+            if str(col).upper() == target: return col
+        raise KeyError(f"Column {target} not found.")
+
+    def _get_source_df(self, use_neutralized=True):
+        if use_neutralized and self.neutralized_df is not None:
+            return self.neutralized_df
+        return self.current_df
+
+    def _resolve_fa_metrics(self, fa_metrics=None):
+        if fa_metrics is None:
+            return [m for m in self.fa_metrics if m != 'Taper_l' or self.use_taper]
+        return fa_metrics
+
+    def _save_show(self, save_path=None):
+        if save_path:
+            plt.savefig(save_path, bbox_inches='tight', dpi=self._SAVE_DPI)
+        plt.show()
+
+    def _display_corr_matrix(self, corr_matrix):
+        try:
+            display(corr_matrix.round(3).style.background_gradient(cmap='Reds', axis=None, vmin=0, vmax=1, gmap=corr_matrix.abs()).format("{:.3f}"))
+        except (TypeError, AttributeError):
+            try:
+                display(corr_matrix.round(3).style.background_gradient(cmap='RdBu_r', axis=None, vmin=-1, vmax=1).format("{:.3f}"))
+            except AttributeError:
+                print("⚠️ To enable colored output, install jinja2: pip install jinja2")
+                display(corr_matrix.round(3))
+
+    def _neutralize_matrix(self, X, components_to_remove, label=""):
+        pca = PCA(n_components=min(X.shape[0], X.shape[1]))
+        X_transformed = pca.fit_transform(X)
+        for idx in components_to_remove:
+            print(f"Removed {label}PC{idx+1} ({pca.explained_variance_ratio_[idx]*100:.1f}%)")
+            X_transformed[:, idx] = 0
+        return pca.inverse_transform(X_transformed)
+
+    @staticmethod
+    def _pca_component(df, comp):
+        X = StandardScaler().fit_transform(df.values)
+        return PCA().fit_transform(X)[:, comp]
+
+    @staticmethod
+    def _arc(i, j, n):
+        return list(range(i, j + 1)) if i <= j else list(range(i, n)) + list(range(0, j + 1))
+
+    @staticmethod
+    def _flip_point(pt, flip_x=False, flip_y=False):
+        return np.array([-pt[0] if flip_x else pt[0], -pt[1] if flip_y else pt[1]])
+
+    # =========================================================================
+    # BLOCK 3: INITIALIZATION AND DATA SETUP
     # =========================================================================
     def __init__(self, df, is_pre_aligned=False, fa_params=None, **fa_overrides):
         self.raw_df = df.copy()
@@ -59,22 +113,31 @@ class MorphoGet:
         self.labels = []
         self.neutralized_df = None
         self.lengths_df = None
-        
+
         self.fa_params = self._DEFAULT_FA_PARAMS.copy()
         self.use_taper = False
 
         self.fa_metrics = list(self._BASE_FA_METRICS)
-        
+
         if fa_params is not None: self.fa_params.update(fa_params)
         if fa_overrides: self.set_fa_params(**fa_overrides)
 
-        # Хранилище для EFA
         self.efa_coeffs_df = None
         self.efa_order = None
         self.efa_normalize = None
         self.efa_locus = None
         self.efa_pca = None
         self.efa_pc_scores = None
+        self._id_to_idx = {}
+
+    @classmethod
+    def from_csv(cls, filepath, **kwargs):
+        if filepath.endswith(('.xls', '.xlsx')):
+            df = pd.read_excel(filepath, **kwargs)
+        else:
+            df = pd.read_csv(filepath, **kwargs)
+        print(f"✅ Data loaded from '{filepath}'. Rows: {len(df)}")
+        return cls(df)
 
     def print_fa_params(self):
         print("\nAvailable landmarks:", self.KEY_LANDMARKS)
@@ -92,7 +155,7 @@ class MorphoGet:
                 print(f"✅ '{key}' -> point {value}")
             else:
                 print(f"⚠️ Key '{key}' ignored. Available: {valid_keys}")
-        
+
         if self.fa_params.get('TaperCosta') is not None and self.fa_params.get('TaperMargin') is not None:
             if not self.use_taper:
                 self.use_taper = True
@@ -122,53 +185,96 @@ class MorphoGet:
             self.xy_cols = []
             for i in sorted(set(x_map) & set(y_map)):
                 self.xy_cols.extend([x_map[i], y_map[i]])
-                
+
         for col in self.xy_cols:
             self.current_df[col] = pd.to_numeric(self.current_df[col], errors='coerce').astype('float64')
-            
-        self.labels = [re.search(r'\d+', c).group() for c in self.xy_cols if c.upper().startswith('X')]
+
+        x_cols = [c for c in self.xy_cols if c.upper().startswith('X')]
+        self.labels = [re.search(r'\d+', c).group() for c in x_cols]
+        self._id_to_idx = {int(re.search(r'\d+', c).group()): i for i, c in enumerate(x_cols)}
         print(f"Selected {len(self.xy_cols)//2} points.")
         return self
 
     # =========================================================================
-    # BLOCK 2: GPA AND NEUTRALIZATION
+    # BLOCK 4: GPA AND NEUTRALIZATION
     # =========================================================================
     def run_gpa(self):
         if self.is_pre_aligned:
-            print("⚠️ Data marked as pre-aligned. GPA skipped.")
+            print("Data marked as pre-aligned. GPA skipped.")
             valid_idx = self.current_df[self.xy_cols].dropna().index
             self.consensus_shape = self.current_df.loc[valid_idx, self.xy_cols].mean().values.reshape(-1, 2)
             return self
+
         valid_idx = self.current_df[self.xy_cols].dropna().index
         coords = self.current_df.loc[valid_idx, self.xy_cols].values
-        mean_shape = np.mean(coords, axis=0)
-        for _ in range(10):
+
+        centered_shapes = []
+        for shape in coords:
+            pts = shape.reshape(-1, 2)
+            pts = pts - np.mean(pts, axis=0)
+            centered_shapes.append(pts.flatten())
+        coords = np.array(centered_shapes)
+
+        initial_mean = np.mean(coords, axis=0).reshape(-1, 2)
+        target_cs = np.sqrt(np.sum(initial_mean**2))
+
+        scaled_shapes = []
+        for shape in coords:
+            pts = shape.reshape(-1, 2)
+            cs = np.sqrt(np.sum(pts**2))
+            if cs > 0:
+                pts = pts * (target_cs / cs)
+            scaled_shapes.append(pts.flatten())
+        coords = np.array(scaled_shapes)
+
+        consensus = np.mean(coords, axis=0).reshape(-1, 2)
+
+        for _ in range(self._GPA_MAX_ITER):
             aligned = []
             for shape in coords:
-                _, mtx, _ = procrustes(mean_shape.reshape(-1, 2), shape.reshape(-1, 2))
-                aligned.append(mtx.flatten())
-            aligned = np.array(aligned)
-            mean_shape = np.mean(aligned, axis=0)
-        self.current_df.loc[valid_idx, self.xy_cols] = aligned
-        self.consensus_shape = mean_shape.reshape(-1, 2)
+                pts = shape.reshape(-1, 2)
+                M = np.dot(pts.T, consensus)
+                U, _, Vt = svd(M)
+                d = np.linalg.det(np.dot(U, Vt))
+                if d < 0:
+                    U[:, -1] *= -1
+                rotation = np.dot(U, Vt)
+                aligned_pts = np.dot(pts, rotation)
+                aligned.append(aligned_pts.flatten())
+
+            coords = np.array(aligned)
+            new_consensus = np.mean(coords, axis=0).reshape(-1, 2)
+
+            if np.max(np.abs(new_consensus - consensus)) < self._GPA_TOL:
+                break
+            consensus = new_consensus
+
+        self.current_df.loc[valid_idx, self.xy_cols] = coords
+        self.consensus_shape = consensus
         self.neutralized_df = None
         print("GPA completed.")
         return self
 
     def neutralize_pcs(self, components_to_remove=[0]):
+        if self.efa_coeffs_df is not None:
+            X_recon = self._neutralize_matrix(self.efa_coeffs_df.values, components_to_remove, label="EFA ")
+            self.efa_coeffs_df = pd.DataFrame(
+                X_recon,
+                index=self.efa_coeffs_df.index,
+                columns=self.efa_coeffs_df.columns
+            )
+            return self
+
         if self.is_pre_aligned:
             print("⚠️ Data marked as pre-aligned. Neutralization skipped.")
             self.neutralized_df = self.current_df.copy()
             return self
+
         valid_idx = self.current_df[self.xy_cols].dropna().index
         X = self.current_df.loc[valid_idx, self.xy_cols].values
-        pca = PCA(n_components=min(X.shape[0], X.shape[1]))
-        X_transformed = pca.fit_transform(X)
-        for idx in components_to_remove:
-            print(f"Removed PC{idx+1} ({pca.explained_variance_ratio_[idx]*100:.1f}%)")
-            X_transformed[:, idx] = 0
+        X_recon = self._neutralize_matrix(X, components_to_remove)
         self.neutralized_df = self.current_df.copy()
-        self.neutralized_df.loc[valid_idx, self.xy_cols] = pca.inverse_transform(X_transformed)
+        self.neutralized_df.loc[valid_idx, self.xy_cols] = X_recon
         return self
 
     def add_metrics(self, metrics_df):
@@ -179,18 +285,12 @@ class MorphoGet:
         return self
 
     # =========================================================================
-    # BLOCK 3.1: FA CALCULATION
+    # BLOCK 5: FA METRICS CALCULATION
     # =========================================================================
-    def _get_col_name(self, df, axis, pt_num):
-        target = f"{axis.upper()}{pt_num}"
-        for col in df.columns:
-            if str(col).upper() == target: return col
-        raise KeyError(f"Column {target} not found.")
-
     def calculate_fa_metrics(self, ma_l_comp=1, sa_l_comp=1, sa_a_comp=1, taper_l_comp=1):
         source_df = self.raw_df.loc[self.current_df.index].copy()
         p = self.fa_params
-        
+
         if self.is_pre_aligned:
             print("⚠️ WARNING: FA calculation uses pre-aligned data (Procrustes units, not mm).")
 
@@ -217,7 +317,7 @@ class MorphoGet:
         Proximal_l = np.sqrt((FA_df['Basal_X'] - x0)**2 + (FA_df['Basal_Y'] - y0)**2)
         Costa_l = np.sqrt((x0 - FA_df['Costa_X'])**2 + (y0 - FA_df['Costa_Y'])**2)
         Tornal_l = np.sqrt((FA_df['Tornal_X'] - x0)**2 + (FA_df['Tornal_Y'] - y0)**2)
-        
+
         Taper = pd.Series(np.nan, index=FA_df.index)
         if self.use_taper:
             Taper = np.sqrt((FA_df['TaperCosta_X'] - FA_df['TaperMargin_X'])**2 + (FA_df['TaperCosta_Y'] - FA_df['TaperMargin_Y'])**2)
@@ -227,39 +327,38 @@ class MorphoGet:
         vT_x = FA_df['Tornal_X'] - FA_df['Basal_X']; vT_y = FA_df['Tornal_Y'] - FA_df['Basal_Y']
         BC_len = np.sqrt(vC_x**2 + vC_y**2); BT_len = np.sqrt(vT_x**2 + vT_y**2)
         Costa_A = np.arccos(np.clip((vL_x * vC_x + vL_y * vC_y) / (L * BC_len), -1.0, 1.0))
-        Tornal_A = np.arccos(np.clip((vL_x * vT_x + vL_y * vT_y) / (L * BT_len), -1.0, 1.0))
+        Margin_A = np.arccos(np.clip((vL_x * vT_x + vL_y * vT_y) / (L * BT_len), -1.0, 1.0))
 
-        col_names = self.xy_cols
-        id_to_idx = {int(re.search(r'\d+', c).group()): col_names.index(c) // 2 for c in col_names if c.upper().startswith('X')}
+        id_to_idx = self._id_to_idx
         Proximal_s = pd.Series(np.nan, index=FA_df.index); Distal_s = pd.Series(np.nan, index=FA_df.index)
         S_taper = pd.Series(np.nan, index=FA_df.index); MA_s = pd.Series(np.nan, index=FA_df.index); Taper_K = pd.Series(np.nan, index=FA_df.index); S = Proximal_s + Distal_s
 
         if all(k in id_to_idx for k in [p['Basal'], p['Apex'], p['Costa'], p['Tornal']]):
             idx_basal, idx_apex, idx_costa, idx_tornal = id_to_idx[p['Basal']], id_to_idx[p['Apex']], id_to_idx[p['Costa']], id_to_idx[p['Tornal']]
             n_points = len(id_to_idx)
-            
-            arc1 = list(range(idx_costa, idx_tornal + 1)) if idx_costa <= idx_tornal else list(range(idx_costa, n_points)) + list(range(0, idx_tornal + 1))
-            arc2 = list(range(idx_tornal, n_points)) + list(range(0, idx_costa + 1)) if idx_costa <= idx_tornal else list(range(idx_tornal, idx_costa + 1))
+
+            arc1 = self._arc(idx_costa, idx_tornal, n_points)
+            arc2 = self._arc(idx_tornal, idx_costa, n_points)
             prox_arc = arc1 if idx_basal in arc1 else arc2; dist_arc = arc2 if idx_basal in arc1 else arc1
-            
+
             contour_coords = source_df.loc[FA_df.index, self.xy_cols].values.reshape(-1, n_points, 2)
             p_inter_np = np.column_stack((x0, y0)).reshape(-1, 1, 2)
-            
+
             def calc_poly_area(arc_idx, close=False):
                 pts = contour_coords[:, arc_idx, :]
                 if close: pts = np.concatenate([pts, p_inter_np], axis=1)
                 x, y = pts[:, :, 0], pts[:, :, 1]
                 return 0.5 * np.abs(np.sum(x * np.roll(y, -1, axis=1) - np.roll(x, -1, axis=1) * y, axis=1))
-            
+
             Proximal_s = pd.Series(calc_poly_area(prox_arc, close=True), index=FA_df.index)
             Distal_s = pd.Series(calc_poly_area(dist_arc, close=True), index=FA_df.index)
             S = Proximal_s + Distal_s
             MA_s = Proximal_s / S
 
-            arc_ca = list(range(idx_costa, idx_apex + 1)) if idx_costa <= idx_apex else list(range(idx_costa, n_points)) + list(range(0, idx_apex + 1))
-            arc_at = list(range(idx_apex, idx_tornal + 1)) if idx_apex <= idx_tornal else list(range(idx_apex, n_points)) + list(range(0, idx_tornal + 1))
+            arc_ca = self._arc(idx_costa, idx_apex, n_points)
+            arc_at = self._arc(idx_apex, idx_tornal, n_points)
             S_taper = pd.Series(calc_poly_area(arc_ca + arc_at[1:]), index=FA_df.index)
-            
+
             A_ct = FA_df['Costa_Y'] - FA_df['Tornal_Y']; B_ct = FA_df['Tornal_X'] - FA_df['Costa_X']
             C_ct = FA_df['Costa_X'] * FA_df['Tornal_Y'] - FA_df['Tornal_X'] * FA_df['Costa_Y']
             denom_ct = np.sqrt(A_ct**2 + B_ct**2)
@@ -269,31 +368,30 @@ class MorphoGet:
 
         self.lengths_df = pd.DataFrame({
             'Distal_l': Distal_l, 'L': L, 'Proximal_l': Proximal_l, 'Costa_l': Costa_l, 'Tornal_l': Tornal_l, "C": C, 'Taper': Taper,
-            'MA_s': MA_s, 'Taper_K': Taper_K, 'Costa_A': Costa_A, 'Tornal_A': Tornal_A
+            'MA_s': MA_s, 'Taper_K': Taper_K, 'Costa_A': Costa_A, 'Margin_A': Margin_A
         }, index=FA_df.index)
 
-        pca1 = PCA()
         idx_ma = self.lengths_df[['Proximal_l', 'Distal_l']].dropna().index
-        self.lengths_df.loc[idx_ma, '2MA'] = pca1.fit_transform(self.lengths_df.loc[idx_ma, ['Proximal_l', 'Distal_l']])[:, ma_l_comp]
-        
+        self.lengths_df.loc[idx_ma, '2MA'] = self._pca_component(self.lengths_df.loc[idx_ma, ['Proximal_l', 'Distal_l']], ma_l_comp)
+
         idx_sa = self.lengths_df[['Costa_l', 'Tornal_l']].dropna().index
-        self.lengths_df.loc[idx_sa, 'SA_l'] = pca1.fit_transform(self.lengths_df.loc[idx_sa, ['Costa_l', 'Tornal_l']])[:, sa_l_comp]
-        
-        idx_sa_a = self.lengths_df[['Costa_A', 'Tornal_A']].dropna().index
-        self.lengths_df.loc[idx_sa_a, 'SA_a'] = pca1.fit_transform(self.lengths_df.loc[idx_sa_a, ['Costa_A', 'Tornal_A']])[:, sa_a_comp]
-        
+        self.lengths_df.loc[idx_sa, 'SA_l'] = self._pca_component(self.lengths_df.loc[idx_sa, ['Costa_l', 'Tornal_l']], sa_l_comp)
+
+        idx_sa_a = self.lengths_df[['Costa_A', 'Margin_A']].dropna().index
+        self.lengths_df.loc[idx_sa_a, 'SA_a'] = self._pca_component(self.lengths_df.loc[idx_sa_a, ['Costa_A', 'Margin_A']], sa_a_comp)
+
         if self.use_taper:
             idx_t = self.lengths_df[['Taper', "C"]].dropna().index
-            self.lengths_df.loc[idx_t, 'Taper_l'] = pca1.fit_transform(self.lengths_df.loc[idx_t, ['Taper', "C"]])[:, taper_l_comp]
-        
+            self.lengths_df.loc[idx_t, 'Taper_l'] = self._pca_component(self.lengths_df.loc[idx_t, ['Taper', "C"]], taper_l_comp)
+
         metrics_to_add = self.lengths_df[['2MA', 'SA_l', 'MA_s', 'Taper_K', 'SA_a']].rename(columns={'2MA': 'MA_l'})
         metrics_to_add['AR_l'] = L / C
         metrics_to_add['AR_s'] = (L ** 2) / S
         if self.use_taper:
             metrics_to_add['Taper_l'] = self.lengths_df['Taper_l']
-            
+
         self.add_metrics(metrics_to_add)
-        
+
         calculated_metrics = [m for m in self.fa_metrics if m in metrics_to_add.columns]
         comp_info = f"(MA_l={ma_l_comp}, SA_l={sa_l_comp}, SA_a={sa_a_comp}"
         if self.use_taper: comp_info += f", Taper_l={taper_l_comp}"
@@ -303,53 +401,51 @@ class MorphoGet:
         return self
 
     # =========================================================================
-    # BLOCK 3.2: ELLIPTICAL FOURIER ANALYSIS
+    # BLOCK 6: ELLIPTICAL FOURIER ANALYSIS
     # =========================================================================
     def calculate_efa(self, order=10, normalize=False, use_neutralized=False):
         if pyefd is None:
             raise ImportError("pyefd library is not installed. Run: pip install pyefd")
         if not self.xy_cols:
             raise ValueError("Call set_landmarks() first")
-            
-        source_df = self.current_df
-        if use_neutralized and self.neutralized_df is not None:
-            source_df = self.neutralized_df
-            
+
+        source_df = self._get_source_df(use_neutralized)
+
         valid_idx = source_df[self.xy_cols].dropna().index
         n_points = len(self.xy_cols) // 2
         coords = source_df.loc[valid_idx, self.xy_cols].values.reshape(-1, n_points, 2)
-        
+
         all_coeffs = []
         loci = []
         for contour in coords:
             coeffs = pyefd.elliptic_fourier_descriptors(contour, order=order, normalize=normalize)
             all_coeffs.append(coeffs.flatten())
             loci.append(pyefd.calculate_dc_coefficients(contour))
-            
+
         coeffs_arr = np.array(all_coeffs)
         loci_arr = np.array(loci)
-        
+
         col_names = [f"EFD_H{h+1}_{c}" for h in range(order) for c in ['A', 'B', 'C', 'D']]
         self.efa_coeffs_df = pd.DataFrame(coeffs_arr, index=valid_idx, columns=col_names)
         self.efa_locus = loci_arr
         self.efa_order = order
         self.efa_normalize = normalize
         self.efa_pca = None
-        
+
         print(f"✅ EFA calculated: {len(valid_idx)} contours, order={order}, normalize={normalize}")
         return self
 
     def run_efa_pca(self, n_components=5):
         if self.efa_coeffs_df is None:
             raise ValueError("Call calculate_efa() first")
-            
+
         pca = PCA(n_components=n_components)
         scores = pca.fit_transform(self.efa_coeffs_df.values)
-        
+
         pc_cols = [f'EFA_PC{i+1}' for i in range(n_components)]
         self.efa_pc_scores = pd.DataFrame(scores, index=self.efa_coeffs_df.index, columns=pc_cols)
         self.efa_pca = pca
-        
+
         print(f"✅ PCA on EFA completed. Explained variance ratio: {pca.explained_variance_ratio_.round(3)}")
         return self
 
@@ -366,136 +462,48 @@ class MorphoGet:
         return np.column_stack((x_recon, y_recon))
 
     # =========================================================================
-    # BLOCK 4: CORRELATIONS
+    # BLOCK 7: CORRELATION ANALYSIS
     # =========================================================================
     def show_correlations(self, fa_metrics=None, n_pcs=4, use_neutralized=True):
-        if fa_metrics is None: 
-            fa_metrics = [m for m in self.fa_metrics if m != 'Taper_l' or self.use_taper]
-            
+        fa_metrics = self._resolve_fa_metrics(fa_metrics)
         valid_cols = [c for c in fa_metrics if c in self.current_df.columns and not self.current_df[c].isna().all()]
-        missing = set(fa_metrics) - set(valid_cols)
-        if missing: 
-            print(f"⚠️ Metrics {missing} skipped or not calculated. (Did you call calculate_fa_metrics()?)")
-        if not valid_cols: 
-            print("❌ Nothing to correlate."); 
+        if not valid_cols:
+            print("❌ Nothing to correlate.")
             return
-
-        source_df = self.neutralized_df if use_neutralized and self.neutralized_df is not None else self.current_df
+        source_df = self._get_source_df(use_neutralized)
         valid_idx = source_df[self.xy_cols].dropna().index
         X_shape = source_df.loc[valid_idx, self.xy_cols].values
-        
         max_possible_pcs = min(X_shape.shape[0], X_shape.shape[1])
         actual_n_pcs = min(n_pcs, max_possible_pcs)
-        
         pc_scores = PCA(n_components=actual_n_pcs).fit_transform(X_shape)
         pc_cols = [f'Shape_PC{i+1}' for i in range(actual_n_pcs)]
-        
         pc_df = pd.DataFrame(pc_scores, columns=pc_cols, index=valid_idx)
         combined_df = pd.concat([pc_df, source_df.loc[valid_idx, valid_cols]], axis=1).dropna()
         if combined_df.empty: print("⚠️ Insufficient data."); return
-            
         corr_matrix = combined_df.corr(method='pearson').loc[pc_cols, valid_cols]
-        try: 
-            display(corr_matrix.round(3).style.background_gradient(cmap='Reds', axis=None, vmin=0, vmax=1, gmap=corr_matrix.abs()).format("{:.3f}"))
-        except (TypeError, AttributeError): 
-            try:
-                display(corr_matrix.round(3).style.background_gradient(cmap='RdBu_r', axis=None, vmin=-1, vmax=1).format("{:.3f}"))
-            except AttributeError:
-                print("⚠️ Для цветного вывода установите jinja2: pip install jinja2")
-                display(corr_matrix.round(3))
+        self._display_corr_matrix(corr_matrix)
 
     def show_efa_correlations(self, fa_metrics=None, n_efa_pcs=4):
         if self.efa_pc_scores is None:
             raise ValueError("Call calculate_efa() and run_efa_pca() first")
-            
-        if fa_metrics is None: 
-            fa_metrics = [m for m in self.fa_metrics if m != 'Taper_l' or self.use_taper]
-            
+        fa_metrics = self._resolve_fa_metrics(fa_metrics)
         valid_cols = [c for c in fa_metrics if c in self.current_df.columns and not self.current_df[c].isna().all()]
-        missing = set(fa_metrics) - set(valid_cols)
-        if missing: 
-            print(f"⚠️ Metrics {missing} skipped or not calculated. (Did you call calculate_fa_metrics()?)")
-        if not valid_cols: 
-            print("❌ Nothing to correlate."); 
+        if not valid_cols:
+            print("❌ Nothing to correlate.")
             return
-
         efa_pc_cols = [f'EFA_PC{i+1}' for i in range(min(n_efa_pcs, len(self.efa_pc_scores.columns)))]
-        
         common_idx = self.efa_pc_scores.index.intersection(self.current_df.dropna(subset=valid_cols).index)
         if common_idx.empty:
             print("❌ No overlapping data between EFA PCs and metrics."); return
-            
         efa_df = self.efa_pc_scores.loc[common_idx, efa_pc_cols]
         metrics_df = self.current_df.loc[common_idx, valid_cols]
-        
         combined_df = pd.concat([efa_df, metrics_df], axis=1)
         corr_matrix = combined_df.corr(method='pearson').loc[efa_pc_cols, valid_cols]
-        
-        try: 
-            display(corr_matrix.round(3).style.background_gradient(cmap='Reds', axis=None, vmin=0, vmax=1, gmap=corr_matrix.abs()).format("{:.3f}"))
-        except (TypeError, AttributeError): 
-            try:
-                display(corr_matrix.round(3).style.background_gradient(cmap='RdBu_r', axis=None, vmin=-1, vmax=1).format("{:.3f}"))
-            except AttributeError:
-                print("⚠️ Install jinja2 for colored output: pip install jinja2")
-                display(corr_matrix.round(3))
+        self._display_corr_matrix(corr_matrix)
 
     # =========================================================================
-    # BLOCK 5: MORPHOSPACE VISUALIZATION
+    # BLOCK 8: MORPHOSPACE AND STATISTICAL PLOTS
     # =========================================================================
-    def plot_biplot(self, *presets, title=None, figsize=(5, 4)):
-        if self.lengths_df is None: raise ValueError("Call calculate_fa_metrics() first")
-        if not presets:
-            presets_to_plot = list(self._BIPLOT_PRESETS.keys())
-        elif len(presets) == 1 and isinstance(presets[0], list):
-            presets_to_plot = presets[0]
-        else:
-            presets_to_plot = list(presets)
-            
-        for preset in presets_to_plot:
-            if preset not in self._BIPLOT_PRESETS: 
-                raise ValueError(f"Preset '{preset}' not found. Available: {list(self._BIPLOT_PRESETS.keys())}")
-            if preset == 'taper_biplot' and not self.use_taper: 
-                print(f"⚠️ Skipping '{preset}': Taper is disabled.")
-                continue
-            columns = self._BIPLOT_PRESETS[preset]
-            data = self.lengths_df[columns].dropna().copy()
-            if data.empty:
-                continue
-            try:
-                Xz = StandardScaler().fit_transform(data.values)
-                pca = PCA(n_components=2, random_state=42)
-                scores = pca.fit_transform(Xz)
-                loadings = pca.components_.T * np.sqrt(pca.explained_variance_)
-            except Exception as e:
-                continue
-            
-            plt.figure(figsize=figsize)
-            plt.scatter(scores[:, 0], scores[:, 1], s=22, alpha=0.55)
-            arrow_scale = 2.5
-            for i, name in enumerate(columns):
-                x, y = loadings[i, 0], loadings[i, 1]
-                plt.arrow(0, 0, arrow_scale * x, arrow_scale * y, color='red', width=0.01, head_width=0.10, length_includes_head=True)
-                plt.text(arrow_scale * x * 1.08, arrow_scale * y * 1.08, name, color='red', fontsize=11)
-            evr = pca.explained_variance_ratio_ * 100
-            plt.axhline(0, color='gray', lw=1); plt.axvline(0, color='gray', lw=1)
-            plt.xlabel(f'PC1 ({evr[0]:.1f}%)'); plt.ylabel(f'PC2 ({evr[1]:.1f}%)')
-            plot_title = title if (title and len(presets_to_plot) == 1) else preset
-            plt.title(plot_title)
-            plt.tight_layout(); plt.show()
-
-    def plot_consensus(self, use_neutralized=True, figsize=(8, 8), smooth=True, flip_x=False, flip_y=False, show_lines=True):
-        source_df = self.neutralized_df if use_neutralized and self.neutralized_df is not None else self.current_df
-        X = source_df[self.xy_cols].dropna().values
-        mean_shape = self._flip_coords(np.mean(X, axis=0).reshape(-1, 2), flip_x, flip_y)
-        plt.figure(figsize=figsize)
-        if show_lines:
-            pts = self._smooth_contour(mean_shape) if smooth else self._close_contour(mean_shape)
-            plt.plot(pts[:, 0], pts[:, 1], 'k-', lw=2.5 if smooth else 1.5)
-        plt.scatter(mean_shape[:, 0], mean_shape[:, 1], c='red', s=40, zorder=5)
-        for i, (x, y) in enumerate(mean_shape): plt.text(x, y, str(self.labels[i]), fontsize=9, ha='center', va='bottom', color='red')
-        plt.title("Mean shape (Consensus)"); plt.gca().set_aspect('equal'); plt.axis('off'); plt.show()
-
     def _flip_coords(self, coords_2d, flip_x=False, flip_y=False):
         pts = np.array(coords_2d).copy()
         if flip_x: pts[:, 0] = -pts[:, 0]
@@ -503,7 +511,7 @@ class MorphoGet:
         return pts
 
     def _smooth_contour(self, coords, n_points=200):
-        if len(coords) < 4: return np.column_stack((coords[:, 0], coords[:, 1]))
+        if len(coords) < 4: return coords
         pts = np.vstack([coords, coords[0]]) if not np.allclose(coords[0], coords[-1]) else coords
         try:
             tck, u = splprep([pts[:, 0], pts[:, 1]], s=0, k=3, per=True)
@@ -513,15 +521,12 @@ class MorphoGet:
     def _close_contour(self, coords):
         return np.vstack([coords, coords[0]]) if not np.allclose(coords[0], coords[-1]) else coords
 
-    def _plot_morphospace_grid(self, shapes_data, titles, n_cols=2, z_ext=3.0, smooth=False, flip_x=False, flip_y=False, figsize=None):
+    def _plot_morphospace_grid(self, shapes_data, titles, n_cols=2, z_ext=3.0, smooth=False, flip_x=False, flip_y=False, figsize=None, save_path=None):
         colors = ['silver', 'dimgray', 'black']
         n_rows = int(np.ceil(len(shapes_data) / n_cols))
-        if figsize is None:
-            figsize = (7.5*n_cols, 3.0*n_rows)
-            
+        if figsize is None: figsize = (7.5*n_cols, 3.0*n_rows)
         fig, axes = plt.subplots(n_rows, n_cols, figsize=figsize, squeeze=False)
         axes = axes.ravel()
-        
         for i, (shape_raw, title) in enumerate(zip(shapes_data, titles)):
             if i >= len(axes): break
             ax = axes[i]
@@ -532,18 +537,18 @@ class MorphoGet:
             shape_mid = self._flip_coords(shape_raw[1].reshape(-1, 2), flip_x, flip_y)
             ax.scatter(shape_mid[:, 0], shape_mid[:, 1], s=12, color=colors[1], alpha=0.7)
             ax.set_title(title, fontsize=12); ax.set_aspect('equal', adjustable='box'); ax.axis('off')
-            
         for j in range(len(shapes_data), len(axes)): axes[j].set_visible(False)
         fig.legend(handles=[
             Line2D([0], [0], color=colors[0], lw=3, label=rf"$-{z_ext:.0f}\sigma$"),
             Line2D([0], [0], color=colors[1], lw=3, label="mean"),
             Line2D([0], [0], color=colors[2], lw=3, label=rf"$+{z_ext:.0f}\sigma$")
         ], loc="upper center", ncol=3, frameon=False)
-        plt.tight_layout(rect=[0, 0, 1, 0.92]); plt.show()
+        plt.tight_layout(rect=[0, 0, 1, 0.92])
+        self._save_show(save_path)
 
-    def plot_pca(self, pc_indices=[0, 1, 2, 3], z_ext=3.0, n_cols=2, use_neutralized=True, smooth=False, 
-                 flip_x=False, flip_y=False, invert_sigma=[], figsize=None):
-        source_df = self.neutralized_df if use_neutralized and self.neutralized_df is not None else self.current_df
+    def plot_pca(self, pc_indices=[0, 1, 2, 3], z_ext=3.0, n_cols=2, use_neutralized=True, smooth=False,
+                 flip_x=False, flip_y=False, invert_sigma=[], figsize=None, save_path=None):
+        source_df = self._get_source_df(use_neutralized)
         X = source_df[self.xy_cols].dropna().values; pca = PCA().fit(X); mean_vec = pca.mean_
         shapes, titles = [], []
         for idx in pc_indices:
@@ -551,45 +556,32 @@ class MorphoGet:
             neg, pos = mean_vec - z_ext * comp, mean_vec + z_ext * comp
             shapes.append((pos, mean_vec, neg) if idx in invert_sigma else (neg, mean_vec, pos))
             titles.append(f"PC{idx+1} ({pca.explained_variance_ratio_[idx]*100:.1f}%)")
-        self._plot_morphospace_grid(shapes, titles, n_cols, z_ext, smooth, flip_x, flip_y, figsize)
+        self._plot_morphospace_grid(shapes, titles, n_cols, z_ext, smooth, flip_x, flip_y, figsize, save_path)
 
-    def plot_efa_pca(self, pc_indices=[0, 1, 2, 3], z_ext=3.0, n_cols=2, n_points=200, 
-                     flip_x=False, flip_y=False, invert_sigma=[], figsize=None):
-        if pyefd is None:
-            raise ImportError("pyefd library is not installed. Run: pip install pyefd")
-        if self.efa_pca is None or self.efa_pc_scores is None:
-            raise ValueError("Call calculate_efa() and run_efa_pca() first")
-            
-        mean_coeffs = self.efa_pca.mean_
-        mean_locus = self.efa_locus.mean(axis=0)
-        
+    def plot_efa_pca(self, pc_indices=[0, 1, 2, 3], z_ext=3.0, n_cols=2, n_points=200,
+                     flip_x=False, flip_y=False, invert_sigma=[], figsize=None, save_path=None):
+        if pyefd is None: raise ImportError("pyefd library is not installed.")
+        if self.efa_pca is None or self.efa_pc_scores is None: raise ValueError("Call calculate_efa() and run_efa_pca() first")
+        mean_coeffs = self.efa_pca.mean_; mean_locus = self.efa_locus.mean(axis=0)
         valid_pc_indices = [idx for idx in pc_indices if idx < self.efa_pca.n_components_]
         if len(valid_pc_indices) < len(pc_indices):
-            print(f"⚠️ Requested PCs {pc_indices}, but only {self.efa_pca.n_components_} computed. Showing {valid_pc_indices}")
-        
+            print(f"Requested PCs {pc_indices}, but only {self.efa_pca.n_components_} calculated. Showing {valid_pc_indices}")
         shapes, titles = [], []
         for idx in valid_pc_indices:
             comp = np.sqrt(self.efa_pca.explained_variance_[idx]) * self.efa_pca.components_[idx]
-            neg_coeffs = mean_coeffs - z_ext * comp
-            pos_coeffs = mean_coeffs + z_ext * comp
-            
+            neg_coeffs = mean_coeffs - z_ext * comp; pos_coeffs = mean_coeffs + z_ext * comp
             shape_neg = self._reconstruct_efa_shape(neg_coeffs, mean_locus, n_points)
             shape_mean = self._reconstruct_efa_shape(mean_coeffs, mean_locus, n_points)
             shape_pos = self._reconstruct_efa_shape(pos_coeffs, mean_locus, n_points)
-            
-            shapes.append((shape_pos.flatten(), shape_mean.flatten(), shape_neg.flatten()) if idx in invert_sigma 
+            shapes.append((shape_pos.flatten(), shape_mean.flatten(), shape_neg.flatten()) if idx in invert_sigma
                           else (shape_neg.flatten(), shape_mean.flatten(), shape_pos.flatten()))
             titles.append(f"EFA PC{idx+1} ({self.efa_pca.explained_variance_ratio_[idx]*100:.1f}%)")
-            
-        if shapes:
-            self._plot_morphospace_grid(shapes, titles, n_cols, z_ext, smooth=False, flip_x=flip_x, flip_y=flip_y, figsize=figsize)
+        if shapes: self._plot_morphospace_grid(shapes, titles, n_cols, z_ext, smooth=False, flip_x=flip_x, flip_y=flip_y, figsize=figsize, save_path=save_path)
 
-    def plot_regressions(self, fa_metrics=None, z_ext=3.0, n_cols=2, use_neutralized=True, smooth=True, 
-                         flip_x=False, flip_y=False, invert_sigma=[], figsize=None):
-        if fa_metrics is None:
-            fa_metrics = [m for m in self.fa_metrics if m != 'Taper_l' or self.use_taper]
-            
-        source_df = self.neutralized_df if use_neutralized and self.neutralized_df is not None else self.current_df
+    def plot_regressions(self, fa_metrics=None, z_ext=3.0, n_cols=2, use_neutralized=True, smooth=True,
+                         flip_x=False, flip_y=False, invert_sigma=[], figsize=None, save_path=None):
+        fa_metrics = self._resolve_fa_metrics(fa_metrics)
+        source_df = self._get_source_df(use_neutralized)
         if any(c not in source_df.columns for c in fa_metrics): raise ValueError("Metrics not found")
         valid_data = source_df[self.xy_cols + fa_metrics].dropna()
         if len(valid_data) < 5: return
@@ -603,26 +595,72 @@ class MorphoGet:
             neg, pos = intercept - z_ext * slope, intercept + z_ext * slope
             shapes.append((pos, intercept, neg) if col in invert_sigma else (neg, intercept, pos))
             titles.append(col)
-        self._plot_morphospace_grid(shapes, titles, n_cols, z_ext, smooth, flip_x, flip_y, figsize)
+        self._plot_morphospace_grid(shapes, titles, n_cols, z_ext, smooth, flip_x, flip_y, figsize, save_path)
+
+    def plot_biplot(self, *presets, title=None, figsize=(5, 4), save_path=None):
+        if self.lengths_df is None: raise ValueError("Call calculate_fa_metrics() first")
+        if not presets:
+            presets_to_plot = list(self._BIPLOT_PRESETS.keys())
+        elif len(presets) == 1 and isinstance(presets[0], list):
+            presets_to_plot = presets[0]
+        else:
+            presets_to_plot = list(presets)
+        for preset in presets_to_plot:
+            if preset not in self._BIPLOT_PRESETS:
+                raise ValueError(f"Preset '{preset}' not found. Available: {list(self._BIPLOT_PRESETS.keys())}")
+            if preset == 'taper_biplot' and not self.use_taper:
+                print(f"Skipping '{preset}': Taper is disabled.")
+                continue
+            columns = self._BIPLOT_PRESETS[preset]
+            data = self.lengths_df[columns].dropna().copy()
+            if data.empty: continue
+            try:
+                Xz = StandardScaler().fit_transform(data.values)
+                pca = PCA(n_components=2, random_state=42)
+                scores = pca.fit_transform(Xz)
+                loadings = pca.components_.T * np.sqrt(pca.explained_variance_)
+            except Exception: continue
+            plt.figure(figsize=figsize)
+            plt.scatter(scores[:, 0], scores[:, 1], s=22, alpha=0.55)
+            arrow_scale = 2.5
+            for i, name in enumerate(columns):
+                x, y = loadings[i, 0], loadings[i, 1]
+                plt.arrow(0, 0, arrow_scale * x, arrow_scale * y, color='red', width=0.01, head_width=0.10, length_includes_head=True)
+                plt.text(arrow_scale * x * 1.08, arrow_scale * y * 1.08, name, color='red', fontsize=11)
+            evr = pca.explained_variance_ratio_ * 100
+            plt.axhline(0, color='gray', lw=1); plt.axvline(0, color='gray', lw=1)
+            plt.xlabel(f'PC1 ({evr[0]:.1f}%)'); plt.ylabel(f'PC2 ({evr[1]:.1f}%)')
+            plot_title = title if (title and len(presets_to_plot) == 1) else preset
+            plt.title(plot_title); plt.tight_layout()
+            self._save_show(save_path)
+
+    def plot_consensus(self, use_neutralized=True, figsize=(8, 8), smooth=True, flip_x=False, flip_y=False, show_lines=True, save_path=None):
+        source_df = self._get_source_df(use_neutralized)
+        X = source_df[self.xy_cols].dropna().values
+        mean_shape = self._flip_coords(np.mean(X, axis=0).reshape(-1, 2), flip_x, flip_y)
+        plt.figure(figsize=figsize)
+        if show_lines:
+            pts = self._smooth_contour(mean_shape) if smooth else self._close_contour(mean_shape)
+            plt.plot(pts[:, 0], pts[:, 1], 'k-', lw=2.5 if smooth else 1.5)
+        plt.scatter(mean_shape[:, 0], mean_shape[:, 1], c='red', s=40, zorder=5)
+        for i, (x, y) in enumerate(mean_shape): plt.text(x, y, str(self.labels[i]), fontsize=9, ha='center', va='bottom', color='red')
+        plt.title("Mean shape (Consensus)"); plt.gca().set_aspect('equal'); plt.axis('off')
+        self._save_show(save_path)
 
     # =========================================================================
-    # BLOCK 6: SCHEMES 
+    # BLOCK 9: FA SCHEMATIC VISUALIZATION
     # =========================================================================
     def _get_fa_coords_and_intersection(self, source_df):
         p = self.fa_params
         if not self.xy_cols: raise ValueError("Call set_landmarks() first")
-        col_names = self.xy_cols
-        id_to_idx = {int(re.search(r'\d+', c).group()): col_names.index(c) // 2 for c in col_names if c.upper().startswith('X')}
+        id_to_idx = self._id_to_idx
         for key, pt_id in p.items():
             if pt_id is not None and pt_id not in id_to_idx: raise KeyError(f"Point {pt_id} ('{key}') not found.")
-        
         coords = source_df[self.xy_cols].mean().values.reshape(-1, 2)
         def get_pt(pt_id): return coords[id_to_idx[pt_id]] if pt_id is not None else None
-        
         basal, apex = get_pt(p['Basal']), get_pt(p['Apex'])
         costa, tornal = get_pt(p['Costa']), get_pt(p['Tornal'])
         taper_c, taper_t = get_pt(p['TaperCosta']), get_pt(p['TaperMargin'])
-        
         A1 = basal[1] - apex[1]; B1 = apex[0] - basal[0]; C1_val = A1 * basal[0] + B1 * basal[1]
         A2 = costa[1] - tornal[1]; B2 = tornal[0] - costa[0]; C2_val = A2 * costa[0] + B2 * costa[1]
         det = A1 * B2 - A2 * B1
@@ -630,137 +668,93 @@ class MorphoGet:
         p_inter = np.array([(B2 * C1_val - B1 * C2_val) / det, (A1 * C2_val - A2 * C1_val) / det])
         return coords, basal, apex, costa, tornal, taper_c, taper_t, p_inter
 
-    def _draw_fa_schema(self, coords, basal, apex, costa, tornal, taper_c, taper_t, p_inter, mean_lengths, flip_x, flip_y, show_individual=False, source_df=None):
+    def _draw_fa_schema(self, coords, basal, apex, costa, tornal, taper_c, taper_t, p_inter, mean_lengths, flip_x, flip_y, show_individual=False, source_df=None, figsize=(12, 7), save_path=None):
         coords = self._flip_coords(coords, flip_x, flip_y)
         if flip_x or flip_y:
-            basal = self._flip_coords([basal], flip_x, flip_y)[0]
-            apex = self._flip_coords([apex], flip_x, flip_y)[0]
-            costa = self._flip_coords([costa], flip_x, flip_y)[0]
-            tornal = self._flip_coords([tornal], flip_x, flip_y)[0]
-            p_inter = self._flip_coords([p_inter], flip_x, flip_y)[0]
-            if taper_c is not None: taper_c = self._flip_coords([taper_c], flip_x, flip_y)[0]
-            if taper_t is not None: taper_t = self._flip_coords([taper_t], flip_x, flip_y)[0]
-
+            basal = self._flip_point(basal, flip_x, flip_y)
+            apex = self._flip_point(apex, flip_x, flip_y)
+            costa = self._flip_point(costa, flip_x, flip_y)
+            tornal = self._flip_point(tornal, flip_x, flip_y)
+            p_inter = self._flip_point(p_inter, flip_x, flip_y)
+            if taper_c is not None: taper_c = self._flip_point(taper_c, flip_x, flip_y)
+            if taper_t is not None: taper_t = self._flip_point(taper_t, flip_x, flip_y)
         OFFSET_VAL = 0.015
         p = self.fa_params
-        
         if mean_lengths is None:
-            mean_lengths = {
-                'L': np.linalg.norm(apex - basal),
-                'C': np.linalg.norm(costa - tornal),
-                'Proximal_l': np.linalg.norm(p_inter - basal),
-                'Distal_l': np.linalg.norm(apex - p_inter),
-                'Costa_l': np.linalg.norm(costa - p_inter),
-                'Tornal_l': np.linalg.norm(tornal - p_inter),
-                'Taper': np.linalg.norm(taper_t - taper_c) if (taper_c is not None and taper_t is not None) else 0.0
-            }
-        
+            mean_lengths = {'L': np.linalg.norm(apex - basal), 'C': np.linalg.norm(costa - tornal),
+                'Proximal_l': np.linalg.norm(p_inter - basal), 'Distal_l': np.linalg.norm(apex - p_inter),
+                'Costa_l': np.linalg.norm(costa - p_inter), 'Tornal_l': np.linalg.norm(tornal - p_inter),
+                'Taper': np.linalg.norm(taper_t - taper_c) if (taper_c is not None and taper_t is not None) else 0.0}
         def get_offset_points(p1, p2, offset_val):
             vec = np.array(p2) - np.array(p1); norm = np.linalg.norm(vec)
             if norm == 0: return p1, p2
             perp = np.array([-vec[1], vec[0]]) / norm
             return np.array(p1) + perp * offset_val, np.array(p2) + perp * offset_val
-            
         def add_label_outward(pt, name):
-            center = coords.mean(axis=0)
-            vec = np.array(pt) - center
-            dist = np.linalg.norm(vec)
+            center = coords.mean(axis=0); vec = np.array(pt) - center; dist = np.linalg.norm(vec)
             if dist == 0: return
-            direction = vec / dist
-            x_range = coords[:, 0].max() - coords[:, 0].min()
-            y_range = coords[:, 1].max() - coords[:, 1].min()
-            max_range = max(x_range, y_range)
-            offset = max_range * 0.07
-            text_x = pt[0] + direction[0] * offset
-            text_y = pt[1] + direction[1] * offset
-            ha = 'left' if direction[0] >= 0 else 'right'
-            va = 'bottom' if direction[1] >= 0 else 'top'
-            ax.text(text_x, text_y, name, fontsize=9, ha=ha, va=va, 
-                    color='black', bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.85))
-
-        fig = plt.figure(figsize=(12, 7)); ax = fig.add_axes([0.05, 0.1, 0.55, 0.8])
+            direction = vec / dist; x_range, y_range = coords[:, 0].max() - coords[:, 0].min(), coords[:, 1].max() - coords[:, 1].min()
+            max_range = max(x_range, y_range); offset = max_range * 0.07
+            text_x, text_y = pt[0] + direction[0] * offset, pt[1] + direction[1] * offset
+            ha = 'left' if direction[0] >= 0 else 'right'; va = 'bottom' if direction[1] >= 0 else 'top'
+            ax.text(text_x, text_y, name, fontsize=9, ha=ha, va=va, color='black', bbox=dict(boxstyle="round,pad=0.2", fc="white", ec="none", alpha=0.85))
+        fig = plt.figure(figsize=figsize); ax = fig.add_axes([0.05, 0.1, 0.55, 0.8])
         arr = np.vstack([coords, coords[0]])
         try:
             tck, u = splprep([arr[:, 0], arr[:, 1]], s=0, k=3, per=True)
             ax.plot(*splev(np.linspace(0, 1, 200), tck), color='black', lw=2.5, zorder=1)
         except Exception: ax.plot(arr[:, 0], arr[:, 1], color='black', lw=2.5, zorder=1)
-            
         ax.scatter(coords[:, 0], coords[:, 1], facecolors='white', edgecolors='black', s=40, zorder=4, linewidth=0.5)
-        
         if show_individual and source_df is not None:
             fa_ids = [p[k] for k in ['Basal', 'Apex', 'Costa', 'Tornal', 'TaperCosta', 'TaperMargin'] if p[k] is not None]
             indiv_fa_pts = []
             for pt_id in fa_ids:
-                try:
-                    indiv_fa_pts.append(source_df[[self._get_col_name(source_df, 'x', pt_id), self._get_col_name(source_df, 'y', pt_id)]].dropna().values)
+                try: indiv_fa_pts.append(source_df[[self._get_col_name(source_df, 'x', pt_id), self._get_col_name(source_df, 'y', pt_id)]].dropna().values)
                 except KeyError: pass
             if indiv_fa_pts:
                 indiv_fa_pts = self._flip_coords(np.vstack(indiv_fa_pts), flip_x, flip_y)
                 ax.scatter(indiv_fa_pts[:, 0], indiv_fa_pts[:, 1], facecolors='red', edgecolors='none', alpha=0.25, s=20, zorder=5)
-
         fa_pts = [pt for pt in [basal, apex, costa, tornal, taper_c, taper_t] if pt is not None]
-        if fa_pts:
-            ax.scatter(*np.array(fa_pts).T, facecolors='red', edgecolors='black', s=60, zorder=6, linewidth=1)
-
-        add_label_outward(basal, f"Basal ({p['Basal']})")
-        add_label_outward(apex, f"Apex ({p['Apex']})")
-        add_label_outward(costa, f"Costa ({p['Costa']})")
-        add_label_outward(tornal, f"Tornal ({p['Tornal']})")
+        if fa_pts: ax.scatter(*np.array(fa_pts).T, facecolors='red', edgecolors='black', s=60, zorder=6, linewidth=1)
+        add_label_outward(basal, f"Basal ({p['Basal']})"); add_label_outward(apex, f"Apex ({p['Apex']})")
+        add_label_outward(costa, f"Costa ({p['Costa']})"); add_label_outward(tornal, f"Tornal ({p['Tornal']})")
         if taper_c is not None: add_label_outward(taper_c, f"T.Costa ({p['TaperCosta']})")
         if taper_t is not None: add_label_outward(taper_t, f"T.Margin ({p['TaperMargin']})")
-
         ax.scatter(*p_inter, facecolors='white', edgecolors='black', s=60, marker='o', zorder=3, linewidth=1)
         ax.plot([basal[0], apex[0]], [basal[1], apex[1]], color='#D62728', lw=2.0, zorder=2, ls='-')
         ax.plot([tornal[0], costa[0]], [tornal[1], costa[1]], color='#1F77B4', lw=2.0, zorder=2, ls='-')
-        if taper_c is not None and taper_t is not None: 
-            ax.plot([taper_c[0], taper_t[0]], [taper_c[1], taper_t[1]], color='#2CA02C', lw=2.0, zorder=2, ls='-')
-
+        if taper_c is not None and taper_t is not None: ax.plot([taper_c[0], taper_t[0]], [taper_c[1], taper_t[1]], color='#2CA02C', lw=2.0, zorder=2, ls='-')
         for p1, p2, off in [(basal, p_inter, OFFSET_VAL), (p_inter, apex, -OFFSET_VAL), (tornal, p_inter, OFFSET_VAL), (p_inter, costa, -OFFSET_VAL)]:
             pt1, pt2 = get_offset_points(p1, p2, off)
             ax.plot([pt1[0], pt2[0]], [pt1[1], pt2[1]], color='black', lw=1.5, zorder=3, ls='--' if off > 0 else ':')
-
         ax.set_aspect('equal'); ax.axis('off')
         ax.set_xlim(coords[:, 0].min() - 0.15, coords[:, 0].max() + 0.15)
         ax.set_ylim(coords[:, 1].min() - 0.10, coords[:, 1].max() + 0.10)
-
-        legend_x = 0.65
-        current_y = 0.90
-        step = 0.04
-        
-        fig.text(legend_x, current_y, "Absolute dimensions:", fontsize=12, fontweight='bold', va='center')
-        current_y -= step
-
+        legend_x, current_y, step = 0.65, 0.90, 0.04
+        fig.text(legend_x, current_y, "Absolute dimensions:", fontsize=12, fontweight='bold', va='center'); current_y -= step
         main_lines = [('L', 'L', '#D62728', '-'), ('C', 'C', '#1F77B4', '-')]
         if taper_c is not None: main_lines.append(('Taper', 'Taper', '#2CA02C', '-'))
-        
         for name, col, color, style in main_lines:
             fig.add_artist(Line2D([legend_x, legend_x + 0.03], [current_y, current_y], color=color, lw=3, ls=style, transform=fig.transFigure))
-            fig.text(legend_x + 0.05, current_y, f"{name} = {mean_lengths[col]:.2f}", fontsize=11, va='center')
-            current_y -= step
-
-        current_y -= step * 0.5 
-        fig.text(legend_x, current_y, "Segments:", fontsize=12, fontweight='bold', va='center')
-        current_y -= step
-        
+            fig.text(legend_x + 0.05, current_y, f"{name} = {mean_lengths[col]:.2f}", fontsize=11, va='center'); current_y -= step
+        current_y -= step * 0.5; fig.text(legend_x, current_y, "Segments:", fontsize=12, fontweight='bold', va='center'); current_y -= step
         for name, col, style in [('Proximal', 'Proximal_l', '--'), ('Distal', 'Distal_l', ':'), ('Tornal', 'Tornal_l', '--'), ('Costa', 'Costa_l', ':')]:
             fig.add_artist(Line2D([legend_x, legend_x + 0.03], [current_y, current_y], color='black', lw=2.5, ls=style, transform=fig.transFigure))
-            fig.text(legend_x + 0.05, current_y, f"{name} = {mean_lengths[col]:.2f}", fontsize=11, va='center')
-            current_y -= step
-            
-        plt.show()
+            fig.text(legend_x + 0.05, current_y, f"{name} = {mean_lengths[col]:.2f}", fontsize=11, va='center'); current_y -= step
+        self._save_show(save_path)
 
-    def plot_schematic(self, use_neutralized=True, figsize=(12, 7), flip_x=False, flip_y=False):
-        source_df = self.neutralized_df if use_neutralized and self.neutralized_df is not None else self.current_df
+    def plot_schematic(self, use_neutralized=True, figsize=(12, 7), flip_x=False, flip_y=False, save_path=None):
+        source_df = self._get_source_df(use_neutralized)
         res = self._get_fa_coords_and_intersection(source_df)
         if res is None: return
         coords, basal, apex, costa, tornal, taper_c, taper_t, p_inter = res
         mean_lengths = self.lengths_df.mean() if self.lengths_df is not None else None
-        self._draw_fa_schema(coords, basal, apex, costa, tornal, taper_c, taper_t, p_inter, mean_lengths, flip_x, flip_y)
+        self._draw_fa_schema(coords, basal, apex, costa, tornal, taper_c, taper_t, p_inter, mean_lengths, flip_x, flip_y, figsize=figsize, save_path=save_path)
 
-    def plot_fa_preview(self, figsize=(12, 7), flip_x=False, flip_y=False):
+    def plot_fa_preview(self, figsize=(12, 7), flip_x=False, flip_y=False, save_path=None):
         source_df = self.raw_df.loc[self.current_df.index]
         res = self._get_fa_coords_and_intersection(source_df)
         if res is None: return
         coords, basal, apex, costa, tornal, taper_c, taper_t, p_inter = res
         mean_lengths = self.lengths_df.mean() if self.lengths_df is not None else None
-        self._draw_fa_schema(coords, basal, apex, costa, tornal, taper_c, taper_t, p_inter, mean_lengths, flip_x, flip_y, show_individual=True, source_df=source_df)
+        self._draw_fa_schema(coords, basal, apex, costa, tornal, taper_c, taper_t, p_inter, mean_lengths, flip_x, flip_y, show_individual=True, source_df=source_df, figsize=figsize, save_path=save_path)

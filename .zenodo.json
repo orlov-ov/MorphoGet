@@ -1,0 +1,23 @@
+{
+  "title": "MorphoGET: A Python Library for Morphometric Analysis of Insect Wing Shape",
+  "description": "MorphoGet is a Python library (class) for morphometric analysis of insect wing shape. The class enables automatic extraction of the most informative flight activity (FA) indicators from geometric landmarks (XY-coordinates) of digitized objects. Performs Generalized Procrustes Analysis (GPA), Elliptical Fourier Analysis (EFA), correlations and visualizes morphospace for comparison and establishment.",
+  "creators": [
+    {
+      "name": "Oleg V. Orlov",
+      "affiliation": "North Caucasian Federal Scientific Center of Horticulture, Viticulture, Wine-making",
+      "orcid": "0009-0001-5408-8963"
+    }
+  ],
+  "license": "AGPL-3.0",
+  "upload_type": "software",
+  "keywords": [
+    "geometric morphometrics",
+    "insect wing",
+    "Procrustes analysis",
+    "elliptical Fourier analysis",
+    "Python",
+    "biometrics"
+	"flight activity"
+  ],
+  "language": "eng"
+}

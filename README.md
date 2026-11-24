@@ -1,18 +1,13 @@
 
-# Morpho**GET**
+# MorphoGet
 
-![Version](https://img.shields.io/badge/version-0.1.0-blue)
-[![License: AGPL-3.0](https://img.shields.io/badge/Code_License-AGPL_3.0-red)](https://www.gnu.org/licenses/agpl-3.0.html)
-[![License: CC0-1.0](https://img.shields.io/badge/Data_License-CC0_1.0-lightgrey)](http://creativecommons.org/publicdomain/zero/1.0/)
-![Python](https://img.shields.io/badge/Python-3.10%2B-green)
-
-**MorphoGet** is a Python library (class) for morphometric analysis of insect wing shape. The class enables automatic extraction of the most informative flight activity (FA) indicators from geometric landmarks (XY-coordinates) of digitized objects. Performs Generalized Procrustes Analysis (GPA), Elliptical Fourier Analysis (EFA), correlations and visualizes morphospace for comparison and establishment.
+MorphoGet is a Python library (class) for morphometric analysis of insect wing shape. The class enables automatic extraction of the most informative flight-related metrics indicators from geometric landmarks (XY-coordinates) of digitized objects. Performs Generalized Procrustes Analysis (GPA), Elliptical Fourier Analysis (EFA), correlations and visualizes morphospace for comparison and establishment.
 
 ## Key Features
 
-- **Flight Activity Metrics Calculation:** Computes aspect ratio, second moment of area, sweep angle, and wing taper from 4–6 homologous landmarks.
-- **Contour Processing:** Automatic shape alignment [Generalized Procrustes Analysis (GPA)](https://docs.scipy.org/doc/scipy-1.15.3/reference/generated/scipy.spatial.procrustes.html#scipy.spatial.procrustes) and neutralization of analyze/digitization error effects (PC removal).
-- **Elliptical Fourier Analysis (EFA):** Shape analysis of the entire contour using the [elliptical Fourier method](https://github.com/hbldh/pyefd).
+- **Flight-related Metrics Calculation:** Computes aspect ratio, second moment of area, sweep angle, and wing taper from 4–6 homologous landmarks.
+- **Contour Processing:** Automatic shape alignment [Generalized Procrustes Analysis (GPA) [1, 2] and neutralization of analyze/digitization error effects (PC removal).
+- **Elliptical Fourier Analysis (EFA):** Shape analysis of the entire contour using the elliptical Fourier method [3, 4].
 - **Correlation Analysis:** Evaluates relationships between metrics and shape principal components (GPA PCA / EFA PCA).
 - **Visualization:** Generates wing schematics, morphospaces (metric-to-shape regressions), consensus plots, and biplots for establishment.
 
@@ -53,7 +48,7 @@ from MorphoGet import morphoget
 df = pd.read_csv("morphometric_data.csv")
 
 # Initialization (set is_pre_aligned=True if data is already aligned)
-get = gorphoget(df)
+get = morphoget(df)
 
 # Filtering (keep only males)
 get.filter_data(column='sex', value='M')
@@ -103,7 +98,7 @@ get.print_fa_params()
 get.plot_schematic(flip_x=True, figsize=(12, 7))
 ```
 
-### 5. Calculating Flight Activity Metrics
+### 5. Calculating Flight-related Metrics
 Computes lengths, areas, and indices. The `comp` arguments specify which PCA component to use for finding inverse relationships (0 or 1).
 
 ```python
@@ -170,7 +165,7 @@ get.show_efa_correlations(n_efa_pcs=4)
 
 ## Description of Calculated Metrics
 
-Given appropriate wing geometry, the program computes key flight activity indicators using just 4 or 6 landmarks:
+Given appropriate wing geometry, the program computes key flight-related metrics using just 4 or 6 landmarks:
 
 1. **Aspect Ratio** — characterizes wing elongation.
    - `AR_l`: Simple ratio of length to width (L/C).
@@ -196,14 +191,14 @@ Given appropriate wing geometry, the program computes key flight activity indica
 
 The `plot_consensus`, `plot_regressions`, `plot_pca`, and `plot_efa_pca` methods share these useful parameters:
 
-| Parameter         | Description                                                                                                                                  
-| :-------------------- | :---------------------------------------------------------------------------------------------------------------------------------------- 
+| Parameter              | Description                                                                                                                                  
+| :--------------------- | :---------------------------------------------------------------------------------------------------------------------------------------- 
 | `figsize`              | Matplotlib figure size, e.g., `(5, 4)`                                                                                                   
-| `flip_x`, `flip_y`   | Mirror the shape along the X and Y axes. Useful for left/right organs.                                                                    
-| `smooth`             | `True` — smooth the contour with a cubic spline. `False` — connect points with straight lines.                                            
+| `flip_x`, `flip_y`     | Mirror the shape along the X and Y axes. Useful for left/right organs.                                                                    
+| `smooth`               | `True` — smooth the contour with a cubic spline. `False` — connect points with straight lines.                                            
 | `z_ext`                | Range of variation in standard deviations (σ). `z_ext=3.0` displays shape at -3σ, mean, and +3σ.                                           
-| `invert_sigma`    | List of PC indices or metric names for which -σ and +σ should be swapped. Useful for logical interpretation of visualizations.           
-| `n_cols`              | Number of columns in the plot grid.                                                                                                      
+| `invert_sigma`         | List of PC indices or metric names for which -σ and +σ should be swapped. Useful for logical interpretation of visualizations.           
+| `n_cols`               | Number of columns in the plot grid.                                                                                                      
 
 ---
 
@@ -212,8 +207,9 @@ The `plot_consensus`, `plot_regressions`, `plot_pca`, and `plot_efa_pca` methods
 - **MorphoGet:** [AGPL-3.0](https://www.gnu.org/licenses/agpl-3.0.html) — open-source, modifications must be public.
 - **Synthetic Data:** [CC0 1.0](http://creativecommons.org/publicdomain/zero/1.0/) — Public Domain, free for any use.
 
-## References
+## References 
 
-- Kuhl, F. P., & Giardina, C. R. (1982). Elliptic Fourier features of a closed contour. *Computer Graphics and Image Processing*, 18(3), 236-258. [DOI: 10.1016/0146-664X(82)90034-X](https://doi.org/10.1016/0146-664X(82)90034-X)
-- hbldh. (2016). PyEFD: Python implementation of "Elliptic Fourier Features of a Closed Contour". GitHub. [https://github.com/hbldh/pyefd](https://github.com/hbldh/pyefd)
-```
+1. Krzanowski, W. J. (2000). “Principles of Multivariate analysis”.
+2. Gower, J. C. (1975). “Generalized procrustes analysis”.
+3. Kuhl, F. P., & Giardina, C. R. (1982). Elliptic Fourier features of a closed contour. *Computer Graphics and Image Processing*, 18(3), 236-258. [DOI: 10.1016/0146-664X(82)90034-X]
+4. hbldh. (2016). PyEFD: Python implementation of "Elliptic Fourier Features of a Closed Contour". GitHub. [https://github.com/hbldh/pyefd](https://github.com/hbldh/pyefd)

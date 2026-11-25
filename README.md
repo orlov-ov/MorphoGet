@@ -1,4 +1,4 @@
-[![DOI](https://zenodo.org)](https://doi.org/10.5281/zenodo.24527686)
+[![DOI](https://zenodo.org)](https://doi.org)
 ![Python](img.shields.io/badge/python-3.8%2B-blue?logo=python&logoColor=white)
 ![Version](img.shields.io/badge/version-0.1.0-orange)
 ![License](img.shields.io/badge/license-AGPL--3.0-green)

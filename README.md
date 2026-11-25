@@ -1,7 +1,15 @@
+[![DOI](https://zenodo.org)](https://doi.org/10.5281/zenodo.24527686)
+![Python](img.shields.io/badge/python-3.8%2B-blue?logo=python&logoColor=white)
+![Version](img.shields.io/badge/version-0.1.0-orange)
+![License](img.shields.io/badge/license-AGPL--3.0-green)
+
+![Entomology](img.shields.io/badge/field-entomology-yellowgreen?style=flat-square)
+![Morphometrics](img.shields.io/badge/morphometrics-wing%20shape-purple?style=flat-square)
+
 
 # MorphoGet
 
-MorphoGet is a Python library (class) for morphometric analysis of insect wing shape. The class enables automatic extraction of the most informative flight-related metrics indicators from geometric landmarks (XY-coordinates) of digitized objects. Performs Generalized Procrustes Analysis (GPA), Elliptical Fourier Analysis (EFA), correlations and visualizes morphospace for comparison and establishment.
+MorphoGet is a Python library (class) for morphometric analysis of insect wing shape. The class enables automatic extraction of the most informative flight-related metrics from geometric landmarks (XY-coordinates) of digitized objects. Performs Generalized Procrustes Analysis (GPA), Elliptical Fourier Analysis (EFA), correlations and visualizes morphospace for comparison and establishment.
 
 ## Key Features
 
@@ -207,7 +215,15 @@ The `plot_consensus`, `plot_regressions`, `plot_pca`, and `plot_efa_pca` methods
 - **MorphoGet:** [AGPL-3.0](https://www.gnu.org/licenses/agpl-3.0.html) — open-source, modifications must be public.
 - **Synthetic Data:** [CC0 1.0](http://creativecommons.org/publicdomain/zero/1.0/) — Public Domain, free for any use.
 
+## Citation
+
+If you use **MorphoGet** in your research, please cite it as:
+
+Orlov, O. V. (2027). MorphoGet (Version v0.1.0) [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.24527686
+
 ## References 
+
+
 
 1. Krzanowski, W. J. (2000). “Principles of Multivariate analysis”.
 2. Gower, J. C. (1975). “Generalized procrustes analysis”.

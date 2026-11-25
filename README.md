@@ -1,10 +1,11 @@
-[![DOI](https://zenodo.org)](https://doi.org)
-![Python](img.shields.io/badge/python-3.8%2B-blue?logo=python&logoColor=white)
-![Version](img.shields.io/badge/version-0.1.0-orange)
-![License](img.shields.io/badge/license-AGPL--3.0-green)
+[![DOI](https:zenodo.org/badge/DOI/10.5281/zenodo.24527686.svg)](https:__doi.org/10.5281/zenodo.24527686)
+![Python](https:img.shields.io/badge/python-3.8%2B-blue?logo=python&logoColor=white)
+![Version](https:img.shields.io/badge/version-0.1.0-orange)
+![License](https:img.shields.io/badge/license-AGPL--3.0-green)
 
-![Entomology](img.shields.io/badge/field-entomology-yellowgreen?style=flat-square)
-![Morphometrics](img.shields.io/badge/morphometrics-wing%20shape-purple?style=flat-square)
+![Entomology](https:img.shields.io/badge/field-entomology-yellowgreen?style=flat-square)
+![Morphometrics](https:img.shields.io/badge/morphometrics-wing%20shape-purple?style=flat-square)
+
 
 
 # MorphoGet
